@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -Werror -Wall -Wextra -O2 -g
+CFLAGS =  -Wall -Wextra -O2 -g
 
 OBJS = mdriver.o mm.o memlib.o fsecs.o fcyc.o clock.o ftimer.o
 

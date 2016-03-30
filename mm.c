@@ -27,11 +27,15 @@
  ********************************************************/
 team_t team = {
 	/* Team name */
-	"AbrahmAB",
+	"XYZ",
 	/* First member's full name */
-	"Abhijit patel",
+	"XYZ",
 	/* First member's email address */
-	"201401432@daiict.ac.in",
+	"XYZ",
+	/* Second member's full name (leave blank if none) */
+	"XYZ",
+	/* Second member's email address (leave blank if none) */
+	"XYZ"
 };
 
 /* Basic constants and macros: */
@@ -60,16 +64,27 @@ team_t team = {
 #define NEXT_BLKP(bp)  ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE)))
 #define PREV_BLKP(bp)  ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE)))
 
+/* pointers to previous and next elements of free list */
+#define GET_NEXT_PTR(bp) (*(char **)(bp + WSIZE))
+#define GET_PREV_PTR(bp) (*(char **)(bp))
+
+/* puts pointers in the next and previous elements of free list */
+#define SET_NEXT_PTR(bp, qp) (GET_NEXT_PTR(bp) = qp)
+#define SET_PREV_PTR(bp, qp) (GET_PREV_PTR(bp) = qp)
+
 /* Global variables: */
 static char *heap_listp; /* Pointer to first block */  
-static void *next;
+static char *free_list_header;
+
 /* Function prototypes for internal helper routines: */
 static void *coalesce(void *bp);
 static void *extend_heap(size_t words);
 static void *find_fit(size_t asize);
-static void *find_fit_best(size_t asize);
-static void *find_fit_next(size_t asize);
 static void place(void *bp, size_t asize);
+
+/* Function prototypes for mainting free_list */
+static void insert_free_list(void *bp);
+static void remove_free_list(void *bp);
 
 /* Function prototypes for heap consistency checker routines: */
 static void checkblock(void *bp);
@@ -87,7 +102,7 @@ static void printblock(void *bp);
 int
 mm_init(void) 
 {
-
+printf("here init started\n");
 	/* Create the initial empty heap. */
 	if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
 		return (-1);
@@ -96,11 +111,14 @@ mm_init(void)
 	PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */ 
 	PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     /* Epilogue header */
 	heap_listp += (2 * WSIZE);
-	next=heap_listp;
+        free_list_header = heap_listp;           /* free list header points to first free block */
+
+printf("here init ended\n");
 	/* Extend the empty heap with a free block of CHUNKSIZE bytes. */
 	if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
 		return (-1);
 	return (0);
+
 }
 
 /* 
@@ -130,7 +148,7 @@ mm_malloc(size_t size)
 		asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
 
 	/* Search the free list for a fit. */
-	if ((bp = find_fit_next(asize)) != NULL) {
+	if ((bp = find_fit(asize)) != NULL) {
 		place(bp, asize);
 		return (bp);
 	}
@@ -228,9 +246,6 @@ mm_realloc(void *ptr, size_t size)
 static void *
 coalesce(void *bp) 
 {
-
-		
-
 	bool prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
 	bool next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
 	size_t size = GET_SIZE(HDRP(bp));
@@ -239,30 +254,50 @@ coalesce(void *bp)
 		return (bp);
 	} else if (prev_alloc && !next_alloc) {         /* Case 2 */
 		size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+		remove_free_list(NEXT_BLKP(bp));
 		PUT(HDRP(bp), PACK(size, 0));
 		PUT(FTRP(bp), PACK(size, 0));
 	} else if (!prev_alloc && next_alloc) {         /* Case 3 */
 		size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+		remove_free_list(PREV_BLKP(bp));
 		PUT(FTRP(bp), PACK(size, 0));
 		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
 		bp = PREV_BLKP(bp);
-		
-		
 	} else {                                        /* Case 4 */
 		size += GET_SIZE(HDRP(PREV_BLKP(bp))) + 
 		    GET_SIZE(FTRP(NEXT_BLKP(bp)));
+		remove_free_list(PREV_BLKP(bp));
+		remove_free_list(NEXT_BLKP(bp));
 		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
 		PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
 		bp = PREV_BLKP(bp);
-		
 	}
-	if(HDRP(next) < HDRP(NEXT_BLKP(bp)) && HDRP(next) > HDRP(bp)){
-		next=bp;
-
-	/*if ((next > (char *)bp) && (next < NEXT_BLKP(bp))) 
-		next = bp;
-	}*/
+	insert_free_list(bp);
 	return (bp);
+}
+
+/*
+ * Inserts the free block pointer in free list
+ */
+static void insert_free_list(void *bp){
+	SET_NEXT_PTR(bp, free_list_header);
+	SET_PREV_PTR(free_list_header, bp);
+	SET_PREV_PTR(bp, NULL);
+	free_list_header = bp;
+}
+
+/*
+ * Removes the free block pointer from the free list
+ */
+static void remove_free_list(void *bp){
+	if(GET_PREV_PTR(bp) == NULL){
+		free_list_header = GET_NEXT_PTR(bp);
+	}
+	else{
+		SET_NEXT_PTR(GET_PREV_PTR(bp), GET_NEXT_PTR(bp));
+	}
+	
+	SET_PREV_PTR(GET_NEXT_PTR(bp), GET_PREV_PTR(bp));
 }
 
 /* 
@@ -300,63 +335,16 @@ extend_heap(size_t words)
  *   Find a fit for a block with "asize" bytes.  Returns that block's address
  *   or NULL if no suitable block was found. 
  */
-
 static void *
 find_fit(size_t asize)
 {
 	void *bp;
 
-	 //Search for the first fit. 
-	for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-		if (!GET_ALLOC(HDRP(bp)) && asize <= GET_SIZE(HDRP(bp)))
+	/* Search for the first fit. */
+	for (bp = free_list_header; GET_SIZE(HDRP(bp)) > 0; bp = GET_NEXT_PTR(bp)) {
+		if (asize <= GET_SIZE(HDRP(bp)))
 			return (bp);
 	}
-	 //No fit was found. 
-	return (NULL);
-}
-
-static void *
-find_fit_next(size_t asize)
-{
-	void *bp;
-	bp=next;
-	
-	/*while(!GET_ALLOC(HDRP(PREV_BLKP(bp)))){
-		bp = PREV_BLKP(bp);
-	}*/
-
-	 //Search for the first fit. 
-	for ( ; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-		if (!GET_ALLOC(HDRP(bp)) && asize <= GET_SIZE(HDRP(bp))){
-			next = bp;
-			return (bp);
-		}
-	}
-	next= bp;
-	 //No fit was found. 
-	return (NULL);
-}
-
-
-static void *
-find_fit_best(size_t asize)
-{
-	void *bp;
-	void *best;
-	int foundspace=0;
-	unsigned int min=1000000000;
-	/* Search for the best fit. */
-	for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp)) {
-		if (!GET_ALLOC(HDRP(bp)) && asize <= GET_SIZE(HDRP(bp))){
-			if(GET_SIZE(HDRP(bp)) < min){
-				best=bp;
-				foundspace=1;
-				min=GET_SIZE(HDRP(bp));
-			}	
-		}
-	}
-	if(foundspace==1)
-		return (best);
 	/* No fit was found. */
 	return (NULL);
 }
@@ -378,12 +366,15 @@ place(void *bp, size_t asize)
 	if ((csize - asize) >= (2 * DSIZE)) { 
 		PUT(HDRP(bp), PACK(asize, 1));
 		PUT(FTRP(bp), PACK(asize, 1));
+		remove_free_list(bp);		
 		bp = NEXT_BLKP(bp);
+		insert_free_list(bp);
 		PUT(HDRP(bp), PACK(csize - asize, 0));
 		PUT(FTRP(bp), PACK(csize - asize, 0));
 	} else {
 		PUT(HDRP(bp), PACK(csize, 1));
 		PUT(FTRP(bp), PACK(csize, 1));
+		remove_free_list(bp);
 	}
 }
 
