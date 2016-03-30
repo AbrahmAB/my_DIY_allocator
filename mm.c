@@ -102,20 +102,17 @@ static void printblock(void *bp);
 int
 mm_init(void) 
 {
-printf("here init started\n");
 	/* Create the initial empty heap. */
-	if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
+	if ((heap_listp = mem_sbrk(8 * WSIZE)) == (void *)-1)
 		return (-1);
 	PUT(heap_listp, 0);                            /* Alignment padding */
 	PUT(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); /* Prologue header */ 
 	PUT(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /* Prologue footer */ 
 	PUT(heap_listp + (3 * WSIZE), PACK(0, 1));     /* Epilogue header */
-	heap_listp += (2 * WSIZE);
-        free_list_header = heap_listp;           /* free list header points to first free block */
+	free_list_header = heap_listp + 2*WSIZE;           /* free list header points to first free block */
 
-printf("here init ended\n");
 	/* Extend the empty heap with a free block of CHUNKSIZE bytes. */
-	if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
+	if (extend_heap(CHUNKSIZE/WSIZE) == NULL)
 		return (-1);
 	return (0);
 
@@ -136,17 +133,14 @@ mm_malloc(size_t size)
 	size_t asize;      /* Adjusted block size */
 	size_t extendsize; /* Amount to extend heap if no fit */
 	void *bp;
-
 	/* Ignore spurious requests. */
 	if (size == 0)
 		return (NULL);
-
 	/* Adjust block size to include overhead and alignment reqs. */
 	if (size <= DSIZE)
 		asize = 2 * DSIZE;
 	else
 		asize = DSIZE * ((size + DSIZE + (DSIZE - 1)) / DSIZE);
-
 	/* Search the free list for a fit. */
 	if ((bp = find_fit(asize)) != NULL) {
 		place(bp, asize);
@@ -155,8 +149,9 @@ mm_malloc(size_t size)
 
 	/* No fit found.  Get more memory and place the block. */
 	extendsize = MAX(asize, CHUNKSIZE);
-	if ((bp = extend_heap(extendsize / WSIZE)) == NULL)  
+	if ((bp = extend_heap(extendsize / WSIZE)) == NULL) { 
 		return (NULL);
+	}
 	place(bp, asize);
 	return (bp);
 } 
@@ -172,7 +167,6 @@ void
 mm_free(void *bp)
 {
 	size_t size;
-
 	/* Ignore spurious requests. */
 	if (bp == NULL)
 		return;
@@ -200,35 +194,41 @@ mm_free(void *bp)
 void *
 mm_realloc(void *ptr, size_t size)
 {
-	size_t oldsize;
-	void *newptr;
-
 	/* If size == 0 then this is just free, and we return NULL. */
-	if (size == 0) {
+	if (size< 0){
+	return NULL;
+	}
+	else if (size == 0) {
 		mm_free(ptr);
 		return (NULL);
 	}
+	
+	size_t prev_size = GET_SIZE(HDRP(ptr)); 
+	size_t req_size = size + 2*WSIZE;
+      	if(req_size <= prev_size){ 
+		return ptr; 
+      	}
+	else{
+		size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(ptr)));
+		size_t combine_size;
+		if(!next_alloc && (( combine_size = prev_size + GET_SIZE( HDRP(NEXT_BLKP(ptr)) ) ) >= req_size))
+		{
+			remove_free_list(NEXT_BLKP(ptr));
+			PUT(HDRP(ptr), PACK(combine_size, 1));
+			PUT(FTRP(ptr), PACK(combine_size, 1));
+		        return ptr;
+		}
+		else{
+			void *new_ptr = mm_malloc(req_size);
+			place(new_ptr, req_size);
+			memcpy(new_ptr, ptr, req_size);
+			mm_free(ptr); 
+		        return new_ptr;
+		}
+	}
 
-	/* If oldptr is NULL, then this is just malloc. */
-	if (ptr == NULL)
-		return (mm_malloc(size));
-
-	newptr = mm_malloc(size);
-
-	/* If realloc() fails the original block is left untouched  */
-	if (newptr == NULL)
-		return (NULL);
-
-	/* Copy the old data. */
-	oldsize = GET_SIZE(HDRP(ptr));
-	if (size < oldsize)
-		oldsize = size;
-	memcpy(newptr, ptr, oldsize);
-
-	/* Free the old block. */
-	mm_free(ptr);
-
-	return (newptr);
+		
+		return NULL;
 }
 
 /*
@@ -246,31 +246,28 @@ mm_realloc(void *ptr, size_t size)
 static void *
 coalesce(void *bp) 
 {
-	bool prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+	bool prev_alloc = GET_ALLOC(  FTRP(PREV_BLKP(bp))  ) || PREV_BLKP(bp) == bp ;
 	bool next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
 	size_t size = GET_SIZE(HDRP(bp));
-
-	if (prev_alloc && next_alloc) {                 /* Case 1 */
-		return (bp);
-	} else if (prev_alloc && !next_alloc) {         /* Case 2 */
+	if (prev_alloc && !next_alloc) {         /* Case 2 */
 		size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
 		remove_free_list(NEXT_BLKP(bp));
 		PUT(HDRP(bp), PACK(size, 0));
 		PUT(FTRP(bp), PACK(size, 0));
 	} else if (!prev_alloc && next_alloc) {         /* Case 3 */
 		size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-		remove_free_list(PREV_BLKP(bp));
-		PUT(FTRP(bp), PACK(size, 0));
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
 		bp = PREV_BLKP(bp);
-	} else {                                        /* Case 4 */
+		remove_free_list((bp));
+		PUT(HDRP((bp)), PACK(size, 0));
+		PUT(FTRP(bp), PACK(size, 0));
+	} else if(!prev_alloc && !next_alloc)	{         /* Case 4 */
 		size += GET_SIZE(HDRP(PREV_BLKP(bp))) + 
 		    GET_SIZE(FTRP(NEXT_BLKP(bp)));
 		remove_free_list(PREV_BLKP(bp));
 		remove_free_list(NEXT_BLKP(bp));
-		PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
-		PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
 		bp = PREV_BLKP(bp);
+		PUT(HDRP((bp)), PACK(size, 0));
+		PUT(FTRP((bp)), PACK(size, 0));
 	}
 	insert_free_list(bp);
 	return (bp);
@@ -284,6 +281,7 @@ static void insert_free_list(void *bp){
 	SET_PREV_PTR(free_list_header, bp);
 	SET_PREV_PTR(bp, NULL);
 	free_list_header = bp;
+
 }
 
 /*
@@ -296,7 +294,6 @@ static void remove_free_list(void *bp){
 	else{
 		SET_NEXT_PTR(GET_PREV_PTR(bp), GET_NEXT_PTR(bp));
 	}
-	
 	SET_PREV_PTR(GET_NEXT_PTR(bp), GET_PREV_PTR(bp));
 }
 
@@ -312,9 +309,11 @@ extend_heap(size_t words)
 {
 	void *bp;
 	size_t size;
-
 	/* Allocate an even number of words to maintain alignment. */
 	size = (words % 2) ? (words + 1) * WSIZE : words * WSIZE;
+	 if (size < 16){
+    		size = 16;
+  	}
 	if ((bp = mem_sbrk(size)) == (void *)-1)  
 		return (NULL);
 
@@ -322,7 +321,6 @@ extend_heap(size_t words)
 	PUT(HDRP(bp), PACK(size, 0));         /* Free block header */
 	PUT(FTRP(bp), PACK(size, 0));         /* Free block footer */
 	PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /* New epilogue header */
-
 	/* Coalesce if the previous block was free. */
 	return (coalesce(bp));
 }
@@ -339,9 +337,8 @@ static void *
 find_fit(size_t asize)
 {
 	void *bp;
-
 	/* Search for the first fit. */
-	for (bp = free_list_header; GET_SIZE(HDRP(bp)) > 0; bp = GET_NEXT_PTR(bp)) {
+	for (bp = free_list_header; GET_ALLOC(HDRP(bp)) == 0; bp = GET_NEXT_PTR(bp)) {
 		if (asize <= GET_SIZE(HDRP(bp)))
 			return (bp);
 	}
@@ -362,15 +359,14 @@ static void
 place(void *bp, size_t asize)
 {
 	size_t csize = GET_SIZE(HDRP(bp));   
-
 	if ((csize - asize) >= (2 * DSIZE)) { 
 		PUT(HDRP(bp), PACK(asize, 1));
 		PUT(FTRP(bp), PACK(asize, 1));
-		remove_free_list(bp);		
+		remove_free_list(bp);	
 		bp = NEXT_BLKP(bp);
-		insert_free_list(bp);
 		PUT(HDRP(bp), PACK(csize - asize, 0));
 		PUT(FTRP(bp), PACK(csize - asize, 0));
+		coalesce(bp);
 	} else {
 		PUT(HDRP(bp), PACK(csize, 1));
 		PUT(FTRP(bp), PACK(csize, 1));
